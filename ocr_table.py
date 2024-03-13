@@ -9,7 +9,7 @@ import numpy as np
 
 import shutil
 from tqdm import tqdm
-
+import re
 
 
 class Logger(object):
@@ -138,9 +138,17 @@ def find_table_lines(img, horizontal_lines):
     # 表头间距
     tableheader_spacing_list = []
 
+    # 定义分页标识符,防止在一个报告单中出现的注释行影响表头的检测
+    spline = 0
+    
     # 定义最开始的线为0
     a_y1 = 0
     for i, horizontal_line in enumerate(horizontal_lines):
+
+        if horizontal_line[0][0] == 0:
+            spline = 1
+
+
         if len(table_lines) == 2 :
             break
         else:
@@ -149,7 +157,9 @@ def find_table_lines(img, horizontal_lines):
         
             tableheader_spacing = horizontal_line[0][1] - a_y1
             # 设置表头间距的阈值
-            if tableheader_spacing < 75 and tableheader_spacing > 20:
+            if ((tableheader_spacing < 75 and tableheader_spacing > 20) and len(table_lines) == 0) or \
+                ((tableheader_spacing < 75 and tableheader_spacing > 20) and spline == 1):
+
                 table_double_line = []
                 header_double_line = []
                 table_index.append(i)
@@ -181,9 +191,9 @@ def extract_table(img, table_lines):
         _, y1, _, _ = up_line
         _, y2, _, _ = down_line
     # 裁剪表格
+
         table_img = img[y1:y2, :, :]
         table_list.append(table_img)
-
 
     return table_list
 
@@ -244,6 +254,46 @@ def merge_table(xlsx1_path, xlsx2_path, save_path):
 
     return df_combined
 
+# 合并两个表格
+def merge_table_v2(xlsx1_path, xlsx2_path, save_path, header_list):
+    '''合并两个表格'''
+    df1 = pd.read_excel(xlsx1_path, header=None)
+    df1_columns = df1.columns.tolist()
+
+    # Read the contents of xlsx2 with column names
+    df2 = pd.read_excel(xlsx2_path, header=None)
+
+    # 当两个表格的列数与header_list不一样时，进行处理
+    # 把列数少的表格补齐表头，df2再对齐df1的表头
+    if len(df1.columns) <= len(header_list):
+        for i in range(len(header_list) - len(df1.columns)):
+            df1 = pd.concat([df1, pd.DataFrame(columns=['Unname' + str(i)])], sort=False)
+    else: 
+        for i in range(len(df1.columns)-len(header_list)):
+            header_list.append('Unname' + str(i))
+
+    
+        
+    if len(df2.columns) < len(header_list):
+        for i in range(len(header_list) - len(df2.columns)):
+            df2 = pd.concat([df2, pd.DataFrame(columns=['Unname' + str(i)])], sort=False)
+    else: 
+        for i in range(len(df2.columns)-len(header_list)):
+            header_list.append('Unname' + str(i))
+
+
+        # df1 = df1.assign(Unname = 'default value')
+    df1.columns = header_list
+    df2.columns = header_list
+
+    # Concatenate the two dataframes vertically
+    df_combined = pd.concat([df1, df2], axis=0, ignore_index=True)
+
+    # Write the combined dataframe to xlsx1
+    df_combined.to_excel(save_path, index=False)
+
+    return df_combined
+
 def post_process_table(table_folder):
     '''表格后处理'''
     
@@ -252,6 +302,7 @@ def post_process_table(table_folder):
 
     # Sort the file paths by creation time
     file_paths_sorted = sorted(file_paths, key=os.path.getctime)
+
 
     if len(file_paths_sorted) == 1:
         return pd.read_excel(file_paths_sorted[0])
@@ -262,7 +313,44 @@ def post_process_table(table_folder):
         return df_combined
     
     else:
-        print("There is no xlsx files in the folder")
+        print(f"There is no xlsx files in the folder: {table_folder}")
+        # df_combined = pd.DataFrame()
+        return None
+    # for file_path in file_paths_sorted:
+    #     os.remove(file_path)
+
+    # return df_combined
+
+def post_process_table_v2(table_folder, header_list):
+    '''表格后处理, 用于处理两个没有表头的表格'''
+    
+    # Get a list of file paths in the folder
+    file_paths = glob.glob(os.path.join(table_folder, '*.xlsx'))
+
+    # Sort the file paths by creation time
+    file_paths_sorted = sorted(file_paths, key=os.path.getctime)
+
+
+    if len(file_paths_sorted) == 1:
+        df = pd.read_excel(file_paths_sorted[0], header=None)
+
+        # 判断表格的列数是否小于header_list的列数
+        if len(df.columns) <= len(header_list):
+            for i in range(len(header_list) - len(df.columns)):
+                df = pd.concat([df, pd.DataFrame(columns=['Unname' + str(i)])], sort=False)
+        else: 
+            for i in range(len(df.columns)-len(header_list)):
+                header_list.append('Unname' + str(i))
+        df.columns = header_list
+        return df
+    
+    elif len(file_paths_sorted) == 2:
+        save_path = os.path.join(table_folder, 'new.xlsx')
+        df_combined = merge_table_v2(file_paths_sorted[0], file_paths_sorted[1], save_path, header_list)
+        return df_combined
+    
+    else:
+        print(f"There is no xlsx files in the folder: {table_folder}")
         # df_combined = pd.DataFrame()
         return None
     # for file_path in file_paths_sorted:
@@ -271,9 +359,60 @@ def post_process_table(table_folder):
     # return df_combined
 
 
+def get_tableheader(ocr, tableheader_img):
+
+    tableheader = ocr.ocr(tableheader_img, cls=True)
+
+    content_str = ''
+    tableheader_list = []
+    for i in tableheader[0]:
+        table_item = i[-1][0]
+        content_str += table_item
+  
+        # if table_item:
+        # tableheader_list.append(i[-1][0])
+
+    return content_str
+
+def tableheader_processing(item):
+    '''表头处理
+    一般情况只会返回一个表头，但
+    如果表头过于复杂，需要人工处理，会返回None
+    '''
+
+    # 只保留中文字符
+    item = re.sub(r'[^\u4e00-\u9fa5]+', '', item)
+
+    if item == "序号项目中文名称结果单位检验方法参考区间":
+        item_list = ['序号', '项目', '中文名称', '结果', '单位', '检验方法', '参考区间']
+    elif item == "序号项目结果参考区间单位":
+        item_list = ['序号', '项目', '结果', '参考区间', '单位']
+    elif item == '序号项目中文名称结果单位参考区间检验方法':
+        item_list = ['序号', '项目', '中文名称', '结果', '单位', '参考区间', '检验方法']
+    elif item == "序号项目中文名称结果单位参考区间":
+        item_list = ['序号', '项目', '中文名称', '结果', '单位', '参考区间']
+    elif item == "序号项冏目结果参考区间单位" or item == "序号项日结果参考区间单位":
+        item_list = ['序号', '项目', '结果', '参考区间', '单位']
+    elif item == "序号项目中文名称结果":
+        item_list = ['序号', '项目', '中文名称', '结果']
+    elif item == "项目结果参考区间检测方法检出限":
+        item_list = ['项目', '结果', '参考区间', '检测方法', '检出限']
+    elif item == '序号项结果参考区间单位':
+        item_list = ['序号', '项目', '结果', '参考区间', '单位']
+    else:
+        # print("item")
+        print("表头复杂，需要人工处理", item)
+        return None
+
+    return item_list
+
+
+
+
+
+
 def extract_singel_img(image_path, ocr, table_engine, header_engine, save_folder="./output/table_output"):
     '''单张图片信息提取'''
-    img_name = image_path.split('/')[-1].split('.')[0]
 
     # 提取对于的图片名字
     img_name = image_path.split('/')[-1].split('.')[0]
@@ -325,6 +464,11 @@ def extract_singel_img(image_path, ocr, table_engine, header_engine, save_folder
             # 对img2进行裁剪
             img2 = img2[tableheader_spacing:, :]
 
+
+            # 表头信息检测
+            tableheader_img = table_img[:tableheader_spacing, :]
+            print(get_tableheader(ocr, tableheader_img))
+
             result1 = table_engine(img1)
             result2 = table_engine(img2)
             save_structure_res(result1, save_folder, name+'_table')
@@ -342,7 +486,12 @@ def extract_singel_img(image_path, ocr, table_engine, header_engine, save_folder
             table_df = post_process_table(os.path.join(save_folder, name+'_table'))
             # table_df = pd.read_excel(glob.glob(os.path.join(save_folder, name+'_table', "*.xlsx"))[0])
 
-        
+
+            # 表头信息检测
+            tableheader_img = table_img[:tableheader_spacing, :]
+            print(get_tableheader(ocr, tableheader_img))
+
+
 
         # 合并表头与表格
         if table_df is not None:
@@ -356,67 +505,281 @@ def extract_singel_img(image_path, ocr, table_engine, header_engine, save_folder
         shutil.rmtree(os.path.join(save_folder, name+'_header'))
 
 
+
+# 筛选一遍表头！
+def extract_tableheader_singel_img(image_path, ocr, table_engine, header_engine, save_folder="./output/table_output"):
+    '''单张图片信息提取'''
+    img_name = image_path.split('/')[-1].split('.')[0]
+
+
+
+    # save_folder = './output'
+    # os.makedirs(save_folder, exist_ok=True)
+
+
+    img = cv2.imread(image_path)
+
+    # 识别所有水平线以及分割线
+    horizontal_lines, split_line = line_detection(img)
+    # 合并距离短的线，避免出现一线多画的情况
+    horizontal_lines = merge_vertical_lines(horizontal_lines)
+
+
+    table_index, table_lines, header_lines, tableheader_spacing_list = find_table_lines(img, horizontal_lines)
+
+    table_list = extract_table(img, table_lines)
+    header_list = extract_table(img, header_lines)
+
+
+    # 遍历上下报告内容
+    for i, (table_img, header_img, tableheader_spacing)  in enumerate(zip(table_list, header_list, tableheader_spacing_list)):
+        
+
+        # 每份检查的文件夹名称
+        name = img_name + '_' + str(i)
+
+        # 保存检测信息
+        # header_result = header_engine(header_img)
+        # save_structure_res(header_result, save_folder, name+'_header') 
+
+        # header_jpg_path = os.path.join(save_folder, name+'_header' , '*.jpg')
+        # header_jpg_path = glob.glob(header_jpg_path)[0]
+
+        # head_df = ocr_for_img(header_jpg_path, ocr)
+            
+        
+        
+        vertical_line = vertical_line_detection(table_img)
+        # print(vertical_line)
+
+
+        if vertical_line:
+            img1, img2 = split_img_by_vertical_line(table_img, vertical_line)
+
+            # 对img2进行裁剪
+            img2 = img2[tableheader_spacing:, :]
+
+
+            # 表头信息检测
+            tableheader_img = img1[:tableheader_spacing, :]
+
+            target_tableheader = get_tableheader(ocr, tableheader_img)
+
+
+            # result1 = table_engine(img1)
+            # result2 = table_engine(img2)
+            # save_structure_res(result1, save_folder, name+'_table')
+            # save_structure_res(result2, save_folder, name+'_table')
+
+            # 合并两个表格为一个新表格
+            # print(os.path.join(save_folder, name))
+            # table_df = post_process_table(os.path.join(save_folder, name+'_table'))
+            
+
+        else:
+            # result = table_engine(table_img)
+            # save_structure_res(result, save_folder, name+'_table')
+
+            # table_df = post_process_table(os.path.join(save_folder, name+'_table'))
+            # table_df = pd.read_excel(glob.glob(os.path.join(save_folder, name+'_table', "*.xlsx"))[0])
+
+
+            # 表头信息检测
+            tableheader_img = table_img[:tableheader_spacing, :]
+            target_tableheader = get_tableheader(ocr, tableheader_img)
+        
+        return target_tableheader
+
+
+
+        # # 合并表头与表格
+        # if table_df is not None:
+        #     df = pd.concat([head_df, table_df], axis=1)
+        #     excel_path = os.path.join(save_folder, img_name+'_'+str(i)+'.xlsx')
+        #     df.to_excel(excel_path, index=False)
+
+
+        # # 删除中间信息文件夹
+        # shutil.rmtree(os.path.join(save_folder, name+'_table'))
+        # shutil.rmtree(os.path.join(save_folder, name+'_header'))
+
+# 筛选一遍表头！
+def extract__singel_img_v2(image_path, ocr, table_engine, header_engine=None, save_folder="./output/table_output"):
+    '''单张图片信息提取'''
+
+    # 提取对于的图片名字
+    img_name = image_path.split('/')[-1].split('.')[0]
+
+    # save_folder = './output'
+    # os.makedirs(save_folder, exist_ok=True)
+
+
+    img = cv2.imread(image_path)
+
+    # 识别所有水平线以及分割线
+    horizontal_lines, split_line = line_detection(img)
+    # 合并距离短的线，避免出现一线多画的情况
+    horizontal_lines = merge_vertical_lines(horizontal_lines)
+
+
+    table_index, table_lines, header_lines, tableheader_spacing_list = find_table_lines(img, horizontal_lines)
+
+    table_list = extract_table(img, table_lines)
+    header_list = extract_table(img, header_lines)
+
+
+    # 遍历上下报告内容
+    for i, (table_img, header_img, tableheader_spacing)  in enumerate(zip(table_list, header_list, tableheader_spacing_list)):
+        
+
+        # 每份检查的文件夹名称
+        name = img_name + '_' + str(i)
+
+        # 保存检测信息
+        # header_result = header_engine(header_img)
+        # save_structure_res(header_result, save_folder, name+'_header') 
+
+        # header_jpg_path = os.path.join(save_folder, name+'_header' , '*.jpg')
+        # header_jpg_path = glob.glob(header_jpg_path)[0]
+
+        # head_df = ocr_for_img(header_jpg_path, ocr)
+
+
+        head_df = ocr_for_img(header_img, ocr)
+            
+        
+        
+        vertical_line = vertical_line_detection(table_img)
+        # print(vertical_line)
+
+        # 如果存在垂直线，需要分开处理
+        if vertical_line:
+            img1, img2 = split_img_by_vertical_line(table_img, vertical_line)
+
+            # 表头信息检测
+            tableheader_img = img1[:tableheader_spacing, :]
+
+            # 对img进行裁剪
+            img1 = img1[tableheader_spacing-2:, :]
+            img2 = img2[tableheader_spacing-2:, :]
+
+
+            # 表头信息检测
+
+            target_tableheader = get_tableheader(ocr, tableheader_img)
+            header_list = tableheader_processing(target_tableheader)
+
+
+            result1 = table_engine(img1)
+            result2 = table_engine(img2)
+            save_structure_res(result1, save_folder, name+'_table')
+            save_structure_res(result2, save_folder, name+'_table')
+
+            # 合并两个表格为一个新表格
+            # print(os.path.join(save_folder, name))
+            table_df = post_process_table_v2(os.path.join(save_folder, name+'_table'), header_list)
+            
+
+        else:
+
+
+            # 表头信息检测
+            tableheader_img = table_img[:tableheader_spacing, :]
+            target_tableheader = get_tableheader(ocr, tableheader_img)
+            header_list = tableheader_processing(target_tableheader)
+
+            # 去掉表头 表格检测需要出现表格线，否则只会把表格当作图片处理，“-2”为了获取表格线
+            img = table_img[tableheader_spacing-2:, :]
+            result = table_engine(img)
+            save_structure_res(result, save_folder, name+'_table')
+
+
+            table_df = post_process_table_v2(os.path.join(save_folder, name+'_table'), header_list)
+
+            # table_df = post_process_table(os.path.join(save_folder, name+'_table'))
+            # table_df = pd.read_excel(glob.glob(os.path.join(save_folder, name+'_table', "*.xlsx"))[0])
+
+
+            # 表头信息检测
+
+        
+
+        # 合并表头与表格
+        if table_df is not None:
+            df = pd.concat([head_df, table_df], axis=1)
+            excel_path = os.path.join(save_folder, img_name+'_'+str(i)+'.xlsx')
+            df.to_excel(excel_path, index=False)
+
+
+        # # 删除中间信息文件夹
+        shutil.rmtree(os.path.join(save_folder, name+'_table'))
+        # shutil.rmtree(os.path.join(save_folder, name+'_header'))
+
+
+
+
 def extract_person(person_dir, ocr, table_engine, header_engine, save_folder="./output/table_output"):
+    '''提取一个人的信息'''
+    person_images = glob.glob(os.path.join(person_dir, "*jc*.png"))
+    for image_path in tqdm(person_images):
+        # print(image_path)
+        extract_singel_img(image_path, ocr, table_engine, header_engine, save_folder=save_folder) 
+
+
+def extract_person_v2(person_dir, ocr, table_engine, header_engine, save_folder="./output/table_output"):
     '''提取一个人的信息'''
     person_images = glob.glob(os.path.join(person_dir, "*jc*.png"))
 
 
-
-    for image_path in tqdm(person_images):
+    for image_path in person_images:
         # print(image_path)
 
+        try:
+            extract__singel_img_v2(image_path, ocr, table_engine, header_engine, save_folder=save_folder)  
 
-        extract_singel_img(image_path, ocr, table_engine, header_engine, save_folder=save_folder)   
+        except Exception as e:
+            print(f"No table found: {image_path}, the error is  {e}")
 
-
-
-
-            
-
+        # extract__singel_img_v2(image_path, ocr, table_engine, header_engine, save_folder=save_folder)  
 
 
 if __name__ == "__main__":
 
-    sys.stdout = Logger('./log.log', sys.stdout)
-    sys.stderr = Logger('./log.log', sys.stderr)
+    # sys.stdout = Logger('./log.log', sys.stdout)
+    # sys.stderr = Logger('./log.log', sys.stderr)
 
 
     ocr = PaddleOCR(use_angle_cls=True, lang="ch") 
     table_engine = PPStructure(use_gpu=True, 
-                            show_log=True,
-                            # det_model_dir='./model/det/ch_PP-OCRv3_det_infer',
-                            # rec_model_dir='./model/rec/ch_PP-ch_PP-OCRv3_rec_infer',
-                            # table_model_dir='/home/skyous/git/ocr_table/model/table/ch_ppstructure_mobile_v2.0_SLANet_infer'
+                            show_log=False,
+                            det_model_dir='./model/det/ch_PP-OCRv3_det_infer',
+                            rec_model_dir='./model/rec/ch_PP-ch_PP-OCRv3_rec_infer',
+                            table_model_dir='/home/skyous/git/ocr_table/model/table/ch_ppstructure_mobile_v2.0_SLANet_infer'
                             )
 
     header_engine = PPStructure(use_gpu=True, 
-                                show_log=True,
+                                show_log=False,
                     )
 
 
-    root_dir = "/home/data2/public/gzyy/images"
-    person_dir = glob.glob(os.path.join(root_dir, "*"))
+    # root_dir = "/home/data2/public/gzyy/images"
+    # person_dir = glob.glob(os.path.join(root_dir, "*"))
 
-    error_list = []
+    # error_list = []
 
 
-    for person_path in person_dir[10:]:
-        person_name = person_path.split('/')[-1]
-        save_folder = os.path.join("./output/table_output", person_name)
+    # for person_path in person_dir[10:]:
+    #     person_name = person_path.split('/')[-1]
+    #     save_folder = os.path.join("./output/table_output", person_name)
 
-        print(person_name)
+    #     print(person_name)
 
-        try:
-            extract_person(person_path, ocr, table_engine, header_engine, save_folder=save_folder)
+    #     try:
+    #         extract_person(person_path, ocr, table_engine, header_engine, save_folder=save_folder)
 
-        except Exception as e:
-            print(f"No table found: {person_path}")
-            error_list.append((person_path, type(e).__name__))
-
-    # Save error_list to a txt file
-    with open('error_list.txt', 'w') as file:
-        for item in error_list:
-            file.write(f"{item[0]} {item[1]}\n")
+    #     except Exception as e:
+    #         print(f"No table found: {person_path}")
+    #         error_list.append((person_path, type(e).__name__))
 
 
 
@@ -426,9 +789,13 @@ if __name__ == "__main__":
 
 
 
-    # image_path = "/home/data2/public/gzyy/images/叶云龙_SMR201125118/jc_page_5.png"
 
-    # extract_singel_img(image_path, ocr, table_engine, header_engine, save_folder="./output/table_output")
+
+    image_path = "/home/data2/public/gzyy/images/钟义辉_MR161121081/jc_page_44.png"
+
+    print(image_path)
+
+    extract__singel_img_v2(image_path, ocr, table_engine, header_engine=None, save_folder="./debug_output/table_output")
 
 
     # extract_person("/home/data2/public/gzyy/images/叶云龙_SMR201125118", ocr, table_engine, header_engine, save_folder="./output/table_output")
