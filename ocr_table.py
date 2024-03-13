@@ -10,7 +10,9 @@ import numpy as np
 import shutil
 from tqdm import tqdm
 import re
+from img2table.document import Image
 
+from img2table.ocr import PaddleOCR as ocr2
 
 class Logger(object):
     def __init__(self, filename='default.log', stream=sys.stdout):
@@ -353,6 +355,13 @@ def post_process_table_v2(table_folder, header_list):
         print(f"There is no xlsx files in the folder: {table_folder}")
         # df_combined = pd.DataFrame()
         return None
+    
+def img2table(table_folder, ocr):
+
+    file_paths = glob.glob(os.path.join(table_folder, '*.jpg'))
+    
+
+
     # for file_path in file_paths_sorted:
     #     os.remove(file_path)
 
@@ -604,7 +613,7 @@ def extract_tableheader_singel_img(image_path, ocr, table_engine, header_engine,
         # shutil.rmtree(os.path.join(save_folder, name+'_header'))
 
 # 筛选一遍表头！
-def extract__singel_img_v2(image_path, ocr, table_engine, header_engine=None, save_folder="./output/table_output"):
+def extract_singel_img_v2(image_path, ocr, table_engine, header_engine=None, save_folder="./output/table_output"):
     '''单张图片信息提取'''
 
     # 提取对于的图片名字
@@ -716,6 +725,139 @@ def extract__singel_img_v2(image_path, ocr, table_engine, header_engine=None, sa
         # shutil.rmtree(os.path.join(save_folder, name+'_header'))
 
 
+def extract_one_table(img, ocr, save_path, img_name):
+    '''
+    使用img2table包进行表格提取
+    '''
+
+    img_save_src = os.path.join(save_path, img_name + '.jpg')
+
+    cv2.imwrite(img_save_src, img)
+
+
+    image = Image(img_save_src, 
+        detect_rotation=False)
+
+    try:
+
+        image_df = (image.extract_tables(
+                    ocr=ocr, implicit_rows=True, min_confidence=50, borderless_tables=True
+                ))[0].df
+
+        image_df.to_excel(os.path.join(save_path, img_name+'.xlsx'),header=None, index=False)
+    except:
+        print(f"No table found:{img_save_src}")
+
+
+ 
+# 筛选一遍表头！
+def extract_singel_img_v3(image_path, ocr, table_engine, ocr_table=None, save_folder="./output/table_output"):
+    '''单张图片信息提取'''
+
+    # 提取对于的图片名字
+    img_name = image_path.split('/')[-1].split('.')[0]
+
+    # save_folder = './output'
+    # os.makedirs(save_folder, exist_ok=True)
+
+
+    img = cv2.imread(image_path)
+
+    # 识别所有水平线以及分割线
+    horizontal_lines, split_line = line_detection(img)
+    # 合并距离短的线，避免出现一线多画的情况
+    horizontal_lines = merge_vertical_lines(horizontal_lines)
+
+
+    table_index, table_lines, header_lines, tableheader_spacing_list = find_table_lines(img, horizontal_lines)
+
+    table_list = extract_table(img, table_lines)
+    header_list = extract_table(img, header_lines)
+
+    
+
+    # 遍历上下报告内容
+    for i, (table_img, header_img, tableheader_spacing)  in enumerate(zip(table_list, header_list, tableheader_spacing_list)):
+        
+
+        # 每份检查的文件夹名称
+        name = img_name + '_' + str(i)
+
+        save_zanshi_folder = os.path.join(save_folder, name+'_table')
+        os.makedirs(save_zanshi_folder, exist_ok=True)
+
+        head_df = ocr_for_img(header_img, ocr)
+            
+        
+        
+        vertical_line = vertical_line_detection(table_img)
+        # print(vertical_line)
+
+        # 如果存在垂直线，需要分开处理
+        if vertical_line:
+            img1, img2 = split_img_by_vertical_line(table_img, vertical_line)
+
+        
+            # 表头信息检测
+            tableheader_img = img1[:tableheader_spacing, :]
+
+            # 对img进行裁剪
+            img1 = img1[tableheader_spacing-2:, :]
+            img2 = img2[tableheader_spacing-2:, :]
+
+            extract_one_table(img=img1, ocr=ocr_table, save_path=save_zanshi_folder, img_name='img1')
+            extract_one_table(img=img2, ocr=ocr_table, save_path=save_zanshi_folder, img_name='img2')
+
+            
+
+
+            # 表头信息检测
+
+            target_tableheader = get_tableheader(ocr, tableheader_img)
+            header_list = tableheader_processing(target_tableheader)
+
+
+            # 合并两个表格为一个新表格
+            # print(os.path.join(save_folder, name))
+            table_df = post_process_table_v2(os.path.join(save_folder, name+'_table'), header_list)
+            
+
+        else:
+
+            # 表头信息检测
+            tableheader_img = table_img[:tableheader_spacing, :]
+            target_tableheader = get_tableheader(ocr, tableheader_img)
+            header_list = tableheader_processing(target_tableheader)
+            
+
+            # 去掉表头 表格检测需要出现表格线，否则只会把表格当作图片处理，“-2”为了获取表格线
+            img = table_img[tableheader_spacing-2:, :]
+
+
+
+            extract_one_table(img=img, ocr=ocr_table, save_path=save_zanshi_folder, img_name='img')
+
+
+
+
+            table_df = post_process_table_v2(os.path.join(save_folder, name+'_table'), header_list)
+
+            # 表头信息检测
+
+        
+
+        # 合并表头与表格
+        if table_df is not None:
+            df = pd.concat([head_df, table_df], axis=1)
+            excel_path = os.path.join(save_folder, img_name+'_'+str(i)+'.xlsx')
+            df.to_excel(excel_path, index=False)
+
+
+        # # 删除中间信息文件夹
+        shutil.rmtree(os.path.join(save_folder, name+'_table'))
+        # shutil.rmtree(os.path.join(save_folder, name+'_header'))
+
+
 
 
 def extract_person(person_dir, ocr, table_engine, header_engine, save_folder="./output/table_output"):
@@ -735,7 +877,7 @@ def extract_person_v2(person_dir, ocr, table_engine, header_engine, save_folder=
         # print(image_path)
 
         try:
-            extract__singel_img_v2(image_path, ocr, table_engine, header_engine, save_folder=save_folder)  
+            extract_singel_img_v2(image_path, ocr, table_engine, header_engine, save_folder=save_folder)  
 
         except Exception as e:
             print(f"No table found: {image_path}, the error is  {e}")
@@ -761,6 +903,10 @@ if __name__ == "__main__":
                                 show_log=False,
                     )
 
+
+    ocr_table = ocr2(
+    lang="ch"
+    )
 
     # root_dir = "/home/data2/public/gzyy/images"
     # person_dir = glob.glob(os.path.join(root_dir, "*"))
@@ -791,11 +937,14 @@ if __name__ == "__main__":
 
 
 
-    image_path = "/home/data2/public/gzyy/images/钟义辉_MR161121081/jc_page_44.png"
+    image_path = "/home/data2/public/gzyy/images/肖明_MR200719001/jc_page_6.png"
 
     print(image_path)
 
-    extract__singel_img_v2(image_path, ocr, table_engine, header_engine=None, save_folder="./debug_output/table_output")
+    name = image_path.split('/')[-2]
+    save_folder = os.path.join("./debug_output", name)
+
+    extract_singel_img_v3(image_path, ocr, table_engine, ocr_table=ocr_table, save_folder=save_folder)
 
 
     # extract_person("/home/data2/public/gzyy/images/叶云龙_SMR201125118", ocr, table_engine, header_engine, save_folder="./output/table_output")
