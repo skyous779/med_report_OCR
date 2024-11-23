@@ -1,3 +1,4 @@
+import argparse
 import cv2
 import matplotlib.pyplot as plt
 import os, sys
@@ -13,6 +14,7 @@ import re
 from img2table.document import Image
 
 from img2table.ocr import PaddleOCR as ocr2
+
 
 class Logger(object):
     def __init__(self, filename='default.log', stream=sys.stdout):
@@ -315,6 +317,7 @@ def post_process_table(table_folder):
         return df_combined
     
     else:
+        # debug
         print(f"There is no xlsx files in the folder: {table_folder}")
         # df_combined = pd.DataFrame()
         return None
@@ -352,7 +355,8 @@ def post_process_table_v2(table_folder, header_list):
         return df_combined
     
     else:
-        print(f"There is no xlsx files in the folder: {table_folder}")
+        # debug
+        # print(f"There is no xlsx files in the folder: {table_folder}")
         # df_combined = pd.DataFrame()
         return None
     
@@ -515,7 +519,7 @@ def extract_singel_img(image_path, ocr, table_engine, header_engine, save_folder
 
 
 
-# 筛选一遍表头！
+#debug 筛选一遍表头！
 def extract_tableheader_singel_img(image_path, ocr, table_engine, header_engine, save_folder="./output/table_output"):
     '''单张图片信息提取'''
     img_name = image_path.split('/')[-1].split('.')[0]
@@ -612,6 +616,17 @@ def extract_tableheader_singel_img(image_path, ocr, table_engine, header_engine,
         # shutil.rmtree(os.path.join(save_folder, name+'_table'))
         # shutil.rmtree(os.path.join(save_folder, name+'_header'))
 
+def check_xlsx(save_folder):
+    # Check if there are any xlsx files in the save folder
+    xlsx_files = glob.glob(os.path.join(save_folder, '*.xlsx'))
+    if len(xlsx_files) > 0:
+        print("There are xlsx files in the save folder.")
+        return True
+    else:
+        print("There are no xlsx files in the save folder.")
+        return False
+
+
 # 筛选一遍表头！
 def extract_singel_img_v2(image_path, ocr, table_engine, header_engine=None, save_folder="./output/table_output"):
     '''单张图片信息提取'''
@@ -644,14 +659,6 @@ def extract_singel_img_v2(image_path, ocr, table_engine, header_engine=None, sav
         # 每份检查的文件夹名称
         name = img_name + '_' + str(i)
 
-        # 保存检测信息
-        # header_result = header_engine(header_img)
-        # save_structure_res(header_result, save_folder, name+'_header') 
-
-        # header_jpg_path = os.path.join(save_folder, name+'_header' , '*.jpg')
-        # header_jpg_path = glob.glob(header_jpg_path)[0]
-
-        # head_df = ocr_for_img(header_jpg_path, ocr)
 
 
         head_df = ocr_for_img(header_img, ocr)
@@ -663,14 +670,14 @@ def extract_singel_img_v2(image_path, ocr, table_engine, header_engine=None, sav
 
         # 如果存在垂直线，需要分开处理
         if vertical_line:
-            img1, img2 = split_img_by_vertical_line(table_img, vertical_line)
+            img1_, img2_ = split_img_by_vertical_line(table_img, vertical_line)
 
             # 表头信息检测
-            tableheader_img = img1[:tableheader_spacing, :]
+            tableheader_img = img1_[:tableheader_spacing, :]
 
             # 对img进行裁剪
-            img1 = img1[tableheader_spacing-2:, :]
-            img2 = img2[tableheader_spacing-2:, :]
+            img1 = img1_[tableheader_spacing:, :]
+            img2 = img2_[tableheader_spacing:, :]
 
 
             # 表头信息检测
@@ -678,15 +685,24 @@ def extract_singel_img_v2(image_path, ocr, table_engine, header_engine=None, sav
             target_tableheader = get_tableheader(ocr, tableheader_img)
             header_list = tableheader_processing(target_tableheader)
 
+            if header_list is None:
+                print("复杂表头的path为： ", image_path)
+
 
             result1 = table_engine(img1)
             result2 = table_engine(img2)
             save_structure_res(result1, save_folder, name+'_table')
             save_structure_res(result2, save_folder, name+'_table')
 
-            # 合并两个表格为一个新表格
-            # print(os.path.join(save_folder, name))
-            table_df = post_process_table_v2(os.path.join(save_folder, name+'_table'), header_list)
+            #debug # 判断是否只生成图片
+            # if check_xlsx(os.path.join(save_folder, name+'_table')):
+            #     pass
+            # else: # 连同表头一起检测，生成table
+            #     result1 = table_engine(img1)
+            #     result2 = table_engine(img2)
+            #     save_structure_res(result1, save_folder, name+'_table')
+            #     save_structure_res(result2, save_folder, name+'_table')
+
             
 
         else:
@@ -697,21 +713,31 @@ def extract_singel_img_v2(image_path, ocr, table_engine, header_engine=None, sav
             target_tableheader = get_tableheader(ocr, tableheader_img)
             header_list = tableheader_processing(target_tableheader)
 
+
+            if header_list is None:
+                print("复杂表头的path为： ", image_path)
+
             # 去掉表头 表格检测需要出现表格线，否则只会把表格当作图片处理，“-2”为了获取表格线
-            img = table_img[tableheader_spacing-2:, :]
-            result = table_engine(img)
+            img = table_img[tableheader_spacing:, :]
+            result = table_engine(img, return_ocr_result_in_table=True)
             save_structure_res(result, save_folder, name+'_table')
 
+            #debug 判断是否只生成图片
+            # if check_xlsx(os.path.join(save_folder, name+'_table')):
+            #     pass
+            # else: # 连同表头一起检测，生成table
+            #     result = table_engine(table_img)
+            #     save_structure_res(result, save_folder, name+'_table')
+            ### fail to generate xlsx file
 
-            table_df = post_process_table_v2(os.path.join(save_folder, name+'_table'), header_list)
 
             # table_df = post_process_table(os.path.join(save_folder, name+'_table'))
             # table_df = pd.read_excel(glob.glob(os.path.join(save_folder, name+'_table', "*.xlsx"))[0])
 
 
-            # 表头信息检测
-
-        
+        # 合并两个表格为一个新表格
+        # print(os.path.join(save_folder, name))
+        table_df = post_process_table_v2(os.path.join(save_folder, name+'_table'), header_list)    
 
         # 合并表头与表格
         if table_df is not None:
@@ -873,81 +899,149 @@ def extract_person_v2(person_dir, ocr, table_engine, header_engine, save_folder=
     person_images = glob.glob(os.path.join(person_dir, "*jc*.png"))
 
 
+
     for image_path in person_images:
         # print(image_path)
 
         try:
-            extract_singel_img_v2(image_path, ocr, table_engine, header_engine, save_folder=save_folder)  
+            extract_singel_img_v2(image_path, ocr, table_engine, header_engine, save_folder=save_folder)
+
 
         except Exception as e:
-            print(f"No table found: {image_path}, the error is  {e}")
+            print(f"No table found or no table detected: {image_path}, Error is : str{e}")
 
         # extract__singel_img_v2(image_path, ocr, table_engine, header_engine, save_folder=save_folder)  
 
+# 定义主要功能的函数
+def main(args):
+
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    # 初始化 OCR 和表格处理引擎
+    ocr = PaddleOCR(use_angle_cls=True, lang="ch") 
+    table_engine = PPStructure(use_gpu=args.use_gpu, 
+                                show_log=args.show_log,
+                                det_model_dir=args.det_model_dir,
+                                rec_model_dir=args.rec_model_dir,
+                                table_model_dir=args.table_model_dir
+                                )
+    header_engine = PPStructure(use_gpu=args.use_gpu, show_log=args.show_log)
+    ocr_table = ocr2(lang="ch")
+    
+    # 批量处理模式
+    if args.ocr_batch:
+        person_dir = glob.glob(os.path.join(args.input_dir, "*"))
+        error_list = []
+        
+        for person_path in person_dir[args.start_index:args.end_index]:
+            person_name = os.path.basename(person_path)
+            save_folder = os.path.join(args.output_dir, person_name)
+            print(f"Processing: {person_name}")
+
+            try:
+                extract_person(person_path, ocr, table_engine, header_engine, save_folder=save_folder)
+            except Exception as e:
+                print(f"No table found: {person_path}")
+                error_list.append((person_path, type(e).__name__))
+
+        print("Processing completed with errors:", error_list)
+    else:
+        # 单文件处理模式
+        print(f"Processing single file: {args.image_path}")
+        name = os.path.basename(os.path.dirname(args.image_path))
+        save_folder = os.path.join(args.output_dir, name)
+
+        # 示例单图像处理函数
+        extract_person_v2(
+            os.path.dirname(args.image_path),
+            ocr,
+            table_engine,
+            header_engine,
+            save_folder=save_folder
+        )
 
 if __name__ == "__main__":
 
-    # sys.stdout = Logger('./log.log', sys.stdout)
-    # sys.stderr = Logger('./log.log', sys.stderr)
+    parser = argparse.ArgumentParser(description="医学检查报告 OCR 关键信息提取工具")
 
+    # 通用参数
+    parser.add_argument("--use_gpu", type=bool, default=True, help="是否使用 GPU")
+    parser.add_argument("--show_log", type=bool, default=False, help="是否显示日志")
+    parser.add_argument("--det_model_dir", type=str, default='./model/det/ch_PP-OCRv3_det_infer', help="检测模型路径")
+    parser.add_argument("--rec_model_dir", type=str, default='./model/rec/ch_PP-ch_PP-OCRv3_rec_infer', help="识别模型路径")
+    parser.add_argument("--table_model_dir", type=str, default='/home/skyous/git/ocr_table/model/table/ch_ppstructure_mobile_v2.0_SLANet_infer', help="表格模型路径")
 
-    ocr = PaddleOCR(use_angle_cls=True, lang="ch") 
-    table_engine = PPStructure(use_gpu=True, 
-                            show_log=False,
-                            det_model_dir='./model/det/ch_PP-OCRv3_det_infer',
-                            rec_model_dir='./model/rec/ch_PP-ch_PP-OCRv3_rec_infer',
-                            table_model_dir='/home/skyous/git/ocr_table/model/table/ch_ppstructure_mobile_v2.0_SLANet_infer'
-                            )
+    # 批量处理参数
+    parser.add_argument("--ocr_batch", type=bool, default=False, help="是否批量处理")
+    parser.add_argument("--input_dir", type=str, default="/home/data2/public/gzyy/images", help="批量处理输入目录")
+    parser.add_argument("--output_dir", type=str, default="./output/table_output", help="结果保存目录")
+    parser.add_argument("--start_index", type=int, default=0, help="批量处理的起始索引")
+    parser.add_argument("--end_index", type=int, default=None, help="批量处理的结束索引")
 
-    header_engine = PPStructure(use_gpu=True, 
-                                show_log=False,
-                    )
+    # 单文件处理参数
+    parser.add_argument("--image_path", type=str, default="/home/data2/public/gzyy/images/尹良耀_SMR200722097/jc_page_11.png", help="单文件处理的图像路径")
 
-
-    ocr_table = ocr2(
-    lang="ch"
-    )
-
-    # root_dir = "/home/data2/public/gzyy/images"
-    # person_dir = glob.glob(os.path.join(root_dir, "*"))
-
-    # error_list = []
-
-
-    # for person_path in person_dir[10:]:
-    #     person_name = person_path.split('/')[-1]
-    #     save_folder = os.path.join("./output/table_output", person_name)
-
-    #     print(person_name)
-
-    #     try:
-    #         extract_person(person_path, ocr, table_engine, header_engine, save_folder=save_folder)
-
-    #     except Exception as e:
-    #         print(f"No table found: {person_path}")
-    #         error_list.append((person_path, type(e).__name__))
+    args = parser.parse_args()
+    main(args)
 
 
 
+# if __name__ == "__main__":
+
+#     # sys.stdout = Logger('./log.log', sys.stdout)
+#     # sys.stderr = Logger('./log.log', sys.stderr)
 
 
+#     ocr = PaddleOCR(use_angle_cls=True, lang="ch") 
+#     table_engine = PPStructure(use_gpu=True, 
+#                             show_log=False,
+#                             det_model_dir='./model/det/ch_PP-OCRv3_det_infer',
+#                             rec_model_dir='./model/rec/ch_PP-ch_PP-OCRv3_rec_infer',
+#                             table_model_dir='/home/skyous/git/ocr_table/model/table/ch_ppstructure_mobile_v2.0_SLANet_infer'
+#                             )
+
+#     header_engine = PPStructure(use_gpu=True, 
+#                                 show_log=False,
+#                     )
 
 
+#     ocr_table = ocr2(
+#     lang="ch"
+#     )
+
+#     ocr_batch = False
+#     if ocr_batch:
+
+#         root_dir = "/home/data2/public/gzyy/images"
+#         person_dir = glob.glob(os.path.join(root_dir, "*"))
+
+#         error_list = []
 
 
+#         for person_path in person_dir[10:]:
+#             person_name = person_path.split('/')[-1]
+#             save_folder = os.path.join("./output/table_output", person_name)
 
+#             print(person_name)
 
-    image_path = "/home/data2/public/gzyy/images/肖明_MR200719001/jc_page_6.png"
+#             try:
+#                 extract_person(person_path, ocr, table_engine, header_engine, save_folder=save_folder)
 
-    print(image_path)
+#             except Exception as e:
+#                 print(f"No table found: {person_path}")
+#                 error_list.append((person_path, type(e).__name__))
 
-    name = image_path.split('/')[-2]
-    save_folder = os.path.join("./debug_output", name)
+#     else:
+#         image_path = "/home/data2/public/gzyy/images/尹良耀_SMR200722097/jc_page_11.png"
 
-    extract_singel_img_v3(image_path, ocr, table_engine, ocr_table=ocr_table, save_folder=save_folder)
+#         print(image_path)
 
+#         name = image_path.split('/')[-2]
+#         save_folder = os.path.join("./debug_output", name)
 
-    # extract_person("/home/data2/public/gzyy/images/叶云龙_SMR201125118", ocr, table_engine, header_engine, save_folder="./output/table_output")
+#         # extract_singel_img_v2(image_path, ocr, table_engine, header_engine=None, save_folder=save_folder)
+
+#         extract_person_v2("/home/data2/public/gzyy/images/尹良耀_SMR200722097", ocr, table_engine, header_engine, save_folder="./debug_output/尹良耀_SMR200722097")
 
 
 
